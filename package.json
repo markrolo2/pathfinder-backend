@@ -1,0 +1,24 @@
+{
+  "name": "pathfinder-backend",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/markrolo2/pathfinder-backend.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/markrolo2/pathfinder-backend/issues"
+  },
+  "homepage": "https://github.com/markrolo2/pathfinder-backend#readme",
+  "dependencies": {
+    "xml2js": "^0.6.2"
+  }
+}
