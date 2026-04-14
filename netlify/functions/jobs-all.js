@@ -2,74 +2,71 @@ const fetch = require("node-fetch");
 const xml2js = require("xml2js");
 
 // --------------------------------------
-// EXPANDED SECTOR KEYWORDS
+// LOVABLE SECTOR SYSTEM
 // --------------------------------------
+const validSectors = [
+  "technology",
+  "media",
+  "business",
+  "education",
+  "health",
+  "arts",
+  "sport",
+  "environment"
+];
+
+// Expanded keyword lists for better matching
 const sectorKeywords = {
   technology: [
     "software", "developer", "engineer", "engineering", "tech", "data", "cloud",
-    "ai", "machine learning", "ml", "cyber", "security", "infrastructure",
+    "ai", "machine learning", "cyber", "security", "infrastructure",
     "full stack", "backend", "frontend", "devops", "qa", "testing", "database"
   ],
   media: [
     "journalist", "editor", "producer", "broadcast", "media", "content",
     "digital", "video", "audio", "radio", "tv", "creative", "storytelling"
   ],
-  finance: [
-    "finance", "accountant", "banking", "investment", "analyst", "financial",
-    "audit", "tax", "credit", "risk", "wealth", "trading"
-  ],
-  healthcare: [
-    "nurse", "doctor", "clinical", "healthcare", "medical", "nhs", "patient",
-    "pharmacy", "mental health", "care", "surgery"
+  business: [
+    "strategy", "management", "consultant", "business", "commercial",
+    "operations", "planning", "director", "executive", "finance", "marketing"
   ],
   education: [
     "teacher", "lecturer", "education", "school", "university", "training",
     "curriculum", "tutor", "teaching assistant"
   ],
-  marketing: [
-    "marketing", "brand", "seo", "social media", "advertising", "campaign",
-    "communications", "public relations", "copywriting"
+  health: [
+    "nurse", "doctor", "clinical", "healthcare", "medical", "nhs", "patient",
+    "pharmacy", "mental health", "care", "surgery"
   ],
-  operations: [
-    "operations", "logistics", "supply chain", "project manager", "pm",
-    "coordinator", "planning", "delivery", "compliance"
+  arts: [
+    "artist", "creative", "design", "graphic", "illustration", "music",
+    "performance", "theatre", "film", "culture"
   ],
-  sales: [
-    "sales", "business development", "account manager", "bdm", "lead generation",
-    "client", "customer", "crm"
+  sport: [
+    "sport", "coach", "athlete", "fitness", "gym", "physical", "recreation"
   ],
-  business: [
-    "strategy", "management", "consultant", "business", "commercial",
-    "operations", "planning", "director", "executive"
-  ],
-  socialcare: [
-    "support worker", "care assistant", "social care", "community support",
-    "youth worker", "family support"
+  environment: [
+    "environment", "sustainability", "climate", "ecology", "green",
+    "carbon", "energy", "biodiversity"
   ]
 };
 
-// --------------------------------------
-// SECTOR PAIRING MAP (NO DUPLICATES)
-// --------------------------------------
+// Pairing map for single-sector matches
 const sectorPairMap = {
   technology: "business",
   media: "technology",
-  finance: "business",
-  healthcare: "education",
-  education: "socialcare",
-  marketing: "business",
-  operations: "business",
-  sales: "business",
-  business: "operations",
-  socialcare: "education"
+  business: "technology",
+  education: "health",
+  health: "education",
+  arts: "media",
+  sport: "health",
+  environment: "business"
 };
 
-// Fallback if nothing matches
-const fallbackPair = ["business", "operations"];
+// Fallback if no sectors match
+const fallbackPair = ["business", "technology"];
 
-// --------------------------------------
-// MATCH SECTORS
-// --------------------------------------
+// Match sectors based on keywords
 function matchSectors(text) {
   const lower = text.toLowerCase();
   const matches = [];
@@ -83,20 +80,21 @@ function matchSectors(text) {
   return matches;
 }
 
-// --------------------------------------
-// ALWAYS RETURN TWO UNIQUE SECTORS
-// --------------------------------------
+// Always return exactly TWO unique valid sectors
 function enforceSectorPair(sectors) {
+  // 2+ matches → take first two
   if (sectors.length >= 2) {
     return [...new Set(sectors.slice(0, 2))];
   }
 
+  // 1 match → pair with mapped partner
   if (sectors.length === 1) {
     const primary = sectors[0];
     const pair = sectorPairMap[primary] || "business";
     return [primary, pair];
   }
 
+  // 0 matches → fallback pair
   return fallbackPair;
 }
 
