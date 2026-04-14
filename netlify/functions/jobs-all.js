@@ -2,7 +2,7 @@ const fetch = require("node-fetch");
 const xml2js = require("xml2js");
 
 // --------------------------------------
-// LOVABLE SECTOR SYSTEM
+// LOVABLE SECTOR SYSTEM (Bias-Reduced)
 // --------------------------------------
 const validSectors = [
   "technology",
@@ -15,67 +15,77 @@ const validSectors = [
   "environment"
 ];
 
+// Tighter, more precise keyword lists
 const sectorKeywords = {
   technology: [
-    "software", "developer", "engineer", "engineering", "tech", "data", "cloud",
-    "ai", "machine learning", "cyber", "security", "infrastructure",
-    "full stack", "backend", "frontend", "devops", "qa", "testing", "database"
+    "software", "developer", "engineer", "programmer", "devops",
+    "cybersecurity", "cloud", "ai", "machine learning", "ml",
+    "data scientist", "full stack", "backend", "frontend"
   ],
   media: [
-    "journalist", "editor", "producer", "broadcast", "media", "content",
-    "digital", "video", "audio", "radio", "tv", "creative", "storytelling"
+    "journalist", "editor", "producer", "broadcast", "radio",
+    "television", "tv", "film", "video editor", "content creator"
   ],
   business: [
-    "strategy", "management", "consultant", "business", "commercial",
-    "operations", "planning", "director", "executive", "finance", "marketing"
+    "strategy", "consultant", "commercial", "business analyst",
+    "management consultant", "executive", "director"
   ],
   education: [
-    "teacher", "lecturer", "education", "school", "university", "training",
-    "curriculum", "tutor", "teaching assistant"
+    "teacher", "lecturer", "tutor", "professor", "curriculum",
+    "education", "school", "university"
   ],
   health: [
-    "nurse", "doctor", "clinical", "healthcare", "medical", "nhs", "patient",
-    "pharmacy", "mental health", "care", "surgery"
+    "nurse", "doctor", "clinical", "medical", "nhs", "patient care",
+    "pharmacy", "mental health"
   ],
   arts: [
-    "artist", "creative", "design", "graphic", "illustration", "music",
-    "performance", "theatre", "film", "culture"
+    "artist", "designer", "illustrator", "creative", "musician",
+    "performer", "theatre", "graphic design"
   ],
   sport: [
-    "sport", "coach", "athlete", "fitness", "gym", "physical", "recreation"
+    "coach", "athlete", "fitness", "sports", "physical education"
   ],
   environment: [
-    "environment", "sustainability", "climate", "ecology", "green",
-    "carbon", "energy", "biodiversity"
+    "sustainability", "climate", "environment", "ecology",
+    "biodiversity", "carbon", "renewable"
   ]
 };
 
+// Balanced, non-circular pairings
 const sectorPairMap = {
-  technology: "business",
-  media: "technology",
+  technology: "media",
+  media: "arts",
   business: "technology",
-  education: "health",
+  education: "arts",
   health: "education",
   arts: "media",
   sport: "health",
   environment: "business"
 };
 
-const fallbackPair = ["business", "technology"];
+// Neutral fallback
+const fallbackPair = ["business", "education"];
 
+// Match sectors with minimum threshold
 function matchSectors(text) {
   const lower = text.toLowerCase();
   const matches = [];
 
   for (const [sector, keywords] of Object.entries(sectorKeywords)) {
-    if (keywords.some((kw) => lower.includes(kw))) {
-      matches.push(sector);
+    let count = 0;
+    for (const kw of keywords) {
+      if (lower.includes(kw)) count++;
     }
+    if (count >= 2) matches.push({ sector, score: count });
   }
 
-  return matches;
+  // Sort by strongest match
+  matches.sort((a, b) => b.score - a.score);
+
+  return matches.map(m => m.sector);
 }
 
+// Always return exactly TWO unique sectors
 function enforceSectorPair(sectors) {
   if (sectors.length >= 2) {
     return [...new Set(sectors.slice(0, 2))];
@@ -83,7 +93,7 @@ function enforceSectorPair(sectors) {
 
   if (sectors.length === 1) {
     const primary = sectors[0];
-    const pair = sectorPairMap[primary] || "business";
+    const pair = sectorPairMap[primary] || fallbackPair[1];
     return [primary, pair];
   }
 
