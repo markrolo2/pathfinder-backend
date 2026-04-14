@@ -203,9 +203,12 @@ exports.handler = async () => {
 
   const allJobs = [...bbcJobs, ...guardianJobs, ...exampleJobs];
 
-  return {
-    statusCode: 200,
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(allJobs)
-  };
+return {
+  statusCode: 200,
+  headers: {
+    "Content-Type": "application/json",
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Headers": "Content-Type"
+  },
+  body: JSON.stringify(allJobs)
 };
