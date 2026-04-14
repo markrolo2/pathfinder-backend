@@ -2,7 +2,7 @@ const fetch = require("node-fetch");
 const xml2js = require("xml2js");
 
 // --------------------------------------
-// LOVABLE SECTOR SYSTEM (Bias-Reduced)
+// LOVABLE SECTOR SYSTEM — WEIGHTED CLASSIFIER
 // --------------------------------------
 const validSectors = [
   "technology",
@@ -15,89 +15,100 @@ const validSectors = [
   "environment"
 ];
 
-// Tighter, more precise keyword lists
-const sectorKeywords = {
-  technology: [
-    "software", "developer", "engineer", "programmer", "devops",
-    "cybersecurity", "cloud", "ai", "machine learning", "ml",
-    "data scientist", "full stack", "backend", "frontend"
-  ],
-  media: [
-    "journalist", "editor", "producer", "broadcast", "radio",
-    "television", "tv", "film", "video editor", "content creator"
-  ],
-  business: [
-    "strategy", "consultant", "commercial", "business analyst",
-    "management consultant", "executive", "director"
-  ],
-  education: [
-    "teacher", "lecturer", "tutor", "professor", "curriculum",
-    "education", "school", "university"
-  ],
-  health: [
-    "nurse", "doctor", "clinical", "medical", "nhs", "patient care",
-    "pharmacy", "mental health"
-  ],
-  arts: [
-    "artist", "designer", "illustrator", "creative", "musician",
-    "performer", "theatre", "graphic design"
-  ],
-  sport: [
-    "coach", "athlete", "fitness", "sports", "physical education"
-  ],
-  environment: [
-    "sustainability", "climate", "environment", "ecology",
-    "biodiversity", "carbon", "renewable"
-  ]
-};
-
-// Balanced, non-circular pairings
-const sectorPairMap = {
-  technology: "media",
-  media: "arts",
-  business: "technology",
-  education: "arts",
-  health: "education",
-  arts: "media",
-  sport: "health",
-  environment: "business"
-};
-
-// Neutral fallback
-const fallbackPair = ["business", "education"];
-
-// Match sectors with minimum threshold
-function matchSectors(text) {
-  const lower = text.toLowerCase();
-  const matches = [];
-
-  for (const [sector, keywords] of Object.entries(sectorKeywords)) {
-    let count = 0;
-    for (const kw of keywords) {
-      if (lower.includes(kw)) count++;
-    }
-    if (count >= 2) matches.push({ sector, score: count });
+// Weighted keyword system
+const sectorSignals = {
+  technology: {
+    strong: ["software engineer", "full stack", "cybersecurity", "machine learning", "data scientist"],
+    keywords: ["developer", "engineer", "programmer", "cloud", "ai", "ml", "backend", "frontend", "devops"],
+    titles: ["engineer", "developer", "technician"]
+  },
+  media: {
+    strong: ["video editor", "broadcast journalist", "radio producer"],
+    keywords: ["journalist", "editor", "producer", "broadcast", "film", "tv", "content creator"],
+    titles: ["editor", "producer", "journalist"]
+  },
+  business: {
+    strong: ["management consultant", "business analyst"],
+    keywords: ["strategy", "consultant", "commercial", "executive", "director"],
+    titles: ["manager", "consultant", "director"]
+  },
+  education: {
+    strong: ["head teacher", "university lecturer"],
+    keywords: ["teacher", "lecturer", "tutor", "curriculum", "education"],
+    titles: ["teacher", "lecturer", "tutor"]
+  },
+  health: {
+    strong: ["registered nurse", "clinical lead"],
+    keywords: ["nurse", "doctor", "clinical", "medical", "nhs", "pharmacy"],
+    titles: ["nurse", "doctor", "clinician"]
+  },
+  arts: {
+    strong: ["graphic designer", "creative director"],
+    keywords: ["artist", "designer", "illustrator", "creative", "musician", "theatre"],
+    titles: ["designer", "artist"]
+  },
+  sport: {
+    strong: ["sports coach", "fitness instructor"],
+    keywords: ["coach", "athlete", "fitness", "sports"],
+    titles: ["coach", "trainer"]
+  },
+  environment: {
+    strong: ["climate specialist", "sustainability officer"],
+    keywords: ["sustainability", "climate", "ecology", "biodiversity", "carbon"],
+    titles: ["environment officer"]
   }
+};
 
-  // Sort by strongest match
-  matches.sort((a, b) => b.score - a.score);
+// Balanced fallback pair
+const fallbackPair = ["business", "technology"];
 
-  return matches.map(m => m.sector);
+// Weighted scoring function
+function scoreSector(text, title, sector) {
+  const lowerText = text.toLowerCase();
+  const lowerTitle = title.toLowerCase();
+  const signals = sectorSignals[sector];
+
+  let score = 0;
+
+  // Strong phrases (weight 5)
+  signals.strong.forEach(phrase => {
+    if (lowerText.includes(phrase)) score += 5;
+  });
+
+  // Job title patterns (weight 4)
+  signals.titles.forEach(t => {
+    if (lowerTitle.includes(t)) score += 4;
+  });
+
+  // Keywords (weight 2)
+  signals.keywords.forEach(kw => {
+    if (lowerText.includes(kw)) score += 2;
+  });
+
+  return score;
 }
 
-// Always return exactly TWO unique sectors
-function enforceSectorPair(sectors) {
-  if (sectors.length >= 2) {
-    return [...new Set(sectors.slice(0, 2))];
+// Determine top two sectors
+function classifySectors(title, description) {
+  const text = `${title} ${description || ""}`;
+  const scores = [];
+
+  for (const sector of validSectors) {
+    const score = scoreSector(text, title, sector);
+    if (score > 0) scores.push({ sector, score });
   }
 
-  if (sectors.length === 1) {
-    const primary = sectors[0];
-    const pair = sectorPairMap[primary] || fallbackPair[1];
-    return [primary, pair];
-  }
+  // No matches → fallback
+  if (scores.length === 0) return fallbackPair;
 
-  return fallbackPair;
+  // Sort by score descending
+  scores.sort((a, b) => b.score - a.score);
+
+  // Return top two unique sectors
+  const unique = [...new Set(scores.map(s => s.sector))];
+  return unique.slice(0, 2).length === 1
+    ? [unique[0], fallbackPair[1]]
+    : unique.slice(0, 2);
 }
 
 // --------------------------------------
@@ -125,8 +136,7 @@ async function fetchBBCJobs() {
   const items = data?.data || [];
 
   return items.map((job) => {
-    const text = `${job.title} ${job.description || ""}`;
-    const sectors = enforceSectorPair(matchSectors(text));
+    const sectors = classifySectors(job.title, job.description);
 
     return {
       id: `bbc-${job.id}`,
@@ -154,8 +164,7 @@ async function fetchGuardianJobs() {
   const items = parsed?.rss?.channel?.item || [];
 
   return items.map((item, index) => {
-    const text = `${item.title} ${item.description}`;
-    const sectors = enforceSectorPair(matchSectors(text));
+    const sectors = classifySectors(item.title, item.description);
 
     return {
       id: `guardian-${index}`,
@@ -175,8 +184,7 @@ async function fetchGuardianJobs() {
 // EXAMPLE SOURCE
 // --------------------------------------
 async function fetchExampleJobs() {
-  const text = "Example Job Placeholder";
-  const sectors = enforceSectorPair(matchSectors(text));
+  const sectors = classifySectors("Example Job", "This is a placeholder job.");
 
   return [
     {
