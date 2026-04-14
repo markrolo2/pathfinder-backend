@@ -15,7 +15,6 @@ const validSectors = [
   "environment"
 ];
 
-// Expanded keyword lists for better matching
 const sectorKeywords = {
   technology: [
     "software", "developer", "engineer", "engineering", "tech", "data", "cloud",
@@ -51,7 +50,6 @@ const sectorKeywords = {
   ]
 };
 
-// Pairing map for single-sector matches
 const sectorPairMap = {
   technology: "business",
   media: "technology",
@@ -63,10 +61,8 @@ const sectorPairMap = {
   environment: "business"
 };
 
-// Fallback if no sectors match
 const fallbackPair = ["business", "technology"];
 
-// Match sectors based on keywords
 function matchSectors(text) {
   const lower = text.toLowerCase();
   const matches = [];
@@ -80,21 +76,17 @@ function matchSectors(text) {
   return matches;
 }
 
-// Always return exactly TWO unique valid sectors
 function enforceSectorPair(sectors) {
-  // 2+ matches → take first two
   if (sectors.length >= 2) {
     return [...new Set(sectors.slice(0, 2))];
   }
 
-  // 1 match → pair with mapped partner
   if (sectors.length === 1) {
     const primary = sectors[0];
     const pair = sectorPairMap[primary] || "business";
     return [primary, pair];
   }
 
-  // 0 matches → fallback pair
   return fallbackPair;
 }
 
@@ -201,12 +193,13 @@ exports.handler = async () => {
 
   const allJobs = [...bbcJobs, ...guardianJobs, ...exampleJobs];
 
-return {
-  statusCode: 200,
-  headers: {
-    "Content-Type": "application/json",
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Headers": "Content-Type"
-  },
-  body: JSON.stringify(allJobs)
+  return {
+    statusCode: 200,
+    headers: {
+      "Content-Type": "application/json",
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Headers": "Content-Type"
+    },
+    body: JSON.stringify(allJobs)
+  };
 };
