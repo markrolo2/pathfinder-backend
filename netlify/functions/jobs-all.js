@@ -2,20 +2,74 @@ const fetch = require("node-fetch");
 const xml2js = require("xml2js");
 
 // --------------------------------------
-// SECTOR MATCHING LOGIC
+// EXPANDED SECTOR KEYWORDS
 // --------------------------------------
 const sectorKeywords = {
-  technology: ["software", "developer", "engineer", "tech", "data", "cloud", "ai", "machine learning"],
-  media: ["journalist", "editor", "producer", "broadcast", "media", "content", "digital"],
-  finance: ["finance", "accountant", "banking", "investment", "analyst"],
-  healthcare: ["nurse", "doctor", "clinical", "healthcare", "medical"],
-  education: ["teacher", "lecturer", "education", "school", "university"],
-  marketing: ["marketing", "brand", "seo", "social media", "advertising"],
-  operations: ["operations", "logistics", "supply chain", "project manager"],
-  sales: ["sales", "business development", "account manager"]
+  technology: [
+    "software", "developer", "engineer", "engineering", "tech", "data", "cloud",
+    "ai", "machine learning", "ml", "cyber", "security", "infrastructure",
+    "full stack", "backend", "frontend", "devops", "qa", "testing", "database"
+  ],
+  media: [
+    "journalist", "editor", "producer", "broadcast", "media", "content",
+    "digital", "video", "audio", "radio", "tv", "creative", "storytelling"
+  ],
+  finance: [
+    "finance", "accountant", "banking", "investment", "analyst", "financial",
+    "audit", "tax", "credit", "risk", "wealth", "trading"
+  ],
+  healthcare: [
+    "nurse", "doctor", "clinical", "healthcare", "medical", "nhs", "patient",
+    "pharmacy", "mental health", "care", "surgery"
+  ],
+  education: [
+    "teacher", "lecturer", "education", "school", "university", "training",
+    "curriculum", "tutor", "teaching assistant"
+  ],
+  marketing: [
+    "marketing", "brand", "seo", "social media", "advertising", "campaign",
+    "communications", "public relations", "copywriting"
+  ],
+  operations: [
+    "operations", "logistics", "supply chain", "project manager", "pm",
+    "coordinator", "planning", "delivery", "compliance"
+  ],
+  sales: [
+    "sales", "business development", "account manager", "bdm", "lead generation",
+    "client", "customer", "crm"
+  ],
+  business: [
+    "strategy", "management", "consultant", "business", "commercial",
+    "operations", "planning", "director", "executive"
+  ],
+  socialcare: [
+    "support worker", "care assistant", "social care", "community support",
+    "youth worker", "family support"
+  ]
 };
 
-// Returns an array of matching sectors for a job
+// --------------------------------------
+// SECTOR PAIRING MAP (NO DUPLICATES)
+// --------------------------------------
+const sectorPairMap = {
+  technology: "business",
+  media: "technology",
+  finance: "business",
+  healthcare: "education",
+  education: "socialcare",
+  marketing: "business",
+  operations: "business",
+  sales: "business",
+  business: "operations",
+  socialcare: "education"
+};
+
+// Fallback if nothing matches
+const fallbackPair = ["business", "operations"];
+
+// --------------------------------------
+// MATCH SECTORS
+// --------------------------------------
 function matchSectors(text) {
   const lower = text.toLowerCase();
   const matches = [];
@@ -26,16 +80,35 @@ function matchSectors(text) {
     }
   }
 
-  return matches.length > 0 ? matches : ["general"];
+  return matches;
 }
 
-// Helper: safely run any fetch function without breaking the whole endpoint
+// --------------------------------------
+// ALWAYS RETURN TWO UNIQUE SECTORS
+// --------------------------------------
+function enforceSectorPair(sectors) {
+  if (sectors.length >= 2) {
+    return [...new Set(sectors.slice(0, 2))];
+  }
+
+  if (sectors.length === 1) {
+    const primary = sectors[0];
+    const pair = sectorPairMap[primary] || "business";
+    return [primary, pair];
+  }
+
+  return fallbackPair;
+}
+
+// --------------------------------------
+// SAFE FETCH WRAPPER
+// --------------------------------------
 async function safeFetch(fn, label) {
   try {
     return await fn();
   } catch (err) {
     console.error(`❌ ${label} failed:`, err.message);
-    return []; // return empty array so the rest still works
+    return [];
   }
 }
 
@@ -53,6 +126,8 @@ async function fetchBBCJobs() {
 
   return items.map((job) => {
     const text = `${job.title} ${job.description || ""}`;
+    const sectors = enforceSectorPair(matchSectors(text));
+
     return {
       id: `bbc-${job.id}`,
       title: job.title,
@@ -62,7 +137,7 @@ async function fetchBBCJobs() {
       applyUrl: `https://careers.bbc.co.uk/job/${job.id}`,
       category: "job",
       description: job.description || "",
-      sectorPair: matchSectors(text)
+      sectorPair: sectors
     };
   });
 }
@@ -80,6 +155,8 @@ async function fetchGuardianJobs() {
 
   return items.map((item, index) => {
     const text = `${item.title} ${item.description}`;
+    const sectors = enforceSectorPair(matchSectors(text));
+
     return {
       id: `guardian-${index}`,
       title: item.title,
@@ -89,16 +166,18 @@ async function fetchGuardianJobs() {
       applyUrl: item.link,
       category: "job",
       description: item.description,
-      sectorPair: matchSectors(text)
+      sectorPair: sectors
     };
   });
 }
 
 // --------------------------------------
-// EXAMPLE SOURCE (placeholder)
+// EXAMPLE SOURCE
 // --------------------------------------
 async function fetchExampleJobs() {
   const text = "Example Job Placeholder";
+  const sectors = enforceSectorPair(matchSectors(text));
+
   return [
     {
       id: "example-001",
@@ -109,7 +188,7 @@ async function fetchExampleJobs() {
       applyUrl: "https://example.com",
       category: "job",
       description: "This is a placeholder job.",
-      sectorPair: matchSectors(text)
+      sectorPair: sectors
     }
   ];
 }
@@ -126,9 +205,7 @@ exports.handler = async () => {
 
   return {
     statusCode: 200,
-    headers: {
-      "Content-Type": "application/json"
-    },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(allJobs)
   };
 };
