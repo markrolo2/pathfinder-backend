@@ -1,2 +1,5 @@
 [functions]
-directory = "netlify/functions"
+  directory = "netlify/functions"
+  external_node_modules = ["@xenova/transformers"]
+  node_bundler = "esbuild"
+  
