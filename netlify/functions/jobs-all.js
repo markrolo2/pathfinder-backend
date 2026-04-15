@@ -1,6 +1,5 @@
 const fetch = require("node-fetch");
 const xml2js = require("xml2js");
-const { pipeline } = require("@xenova/transformers");
 
 // --------------------------------------
 // AI SECTOR CLASSIFIER (EMBEDDING-BASED)
@@ -30,11 +29,12 @@ const SECTOR_DESCRIPTIONS = {
   environment: "sustainability, climate science, ecology, biodiversity, renewable energy"
 };
 
-// Load embedding model once (cached across invocations)
+// Lazy-loaded embedder
 let embedder = null;
 
 async function loadEmbedder() {
   if (!embedder) {
+    const { pipeline } = await import("@xenova/transformers");
     embedder = await pipeline("feature-extraction", "Xenova/all-MiniLM-L6-v2");
   }
   return embedder;
