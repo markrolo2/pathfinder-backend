@@ -1,10 +1,13 @@
 const fetch = require("node-fetch");
 const xml2js = require("xml2js");
+const { pipeline } = require("@xenova/transformers");
 
 // --------------------------------------
-// LOVABLE SECTOR SYSTEM — WEIGHTED CLASSIFIER
+// AI SECTOR CLASSIFIER (EMBEDDING-BASED)
 // --------------------------------------
-const validSectors = [
+
+// Lovable’s allowed sectors
+const SECTORS = [
   "technology",
   "media",
   "business",
@@ -15,100 +18,67 @@ const validSectors = [
   "environment"
 ];
 
-// Weighted keyword system
-const sectorSignals = {
-  technology: {
-    strong: ["software engineer", "full stack", "cybersecurity", "machine learning", "data scientist"],
-    keywords: ["developer", "engineer", "programmer", "cloud", "ai", "ml", "backend", "frontend", "devops"],
-    titles: ["engineer", "developer", "technician"]
-  },
-  media: {
-    strong: ["video editor", "broadcast journalist", "radio producer"],
-    keywords: ["journalist", "editor", "producer", "broadcast", "film", "tv", "content creator"],
-    titles: ["editor", "producer", "journalist"]
-  },
-  business: {
-    strong: ["management consultant", "business analyst"],
-    keywords: ["strategy", "consultant", "commercial", "executive", "director"],
-    titles: ["manager", "consultant", "director"]
-  },
-  education: {
-    strong: ["head teacher", "university lecturer"],
-    keywords: ["teacher", "lecturer", "tutor", "curriculum", "education"],
-    titles: ["teacher", "lecturer", "tutor"]
-  },
-  health: {
-    strong: ["registered nurse", "clinical lead"],
-    keywords: ["nurse", "doctor", "clinical", "medical", "nhs", "pharmacy"],
-    titles: ["nurse", "doctor", "clinician"]
-  },
-  arts: {
-    strong: ["graphic designer", "creative director"],
-    keywords: ["artist", "designer", "illustrator", "creative", "musician", "theatre"],
-    titles: ["designer", "artist"]
-  },
-  sport: {
-    strong: ["sports coach", "fitness instructor"],
-    keywords: ["coach", "athlete", "fitness", "sports"],
-    titles: ["coach", "trainer"]
-  },
-  environment: {
-    strong: ["climate specialist", "sustainability officer"],
-    keywords: ["sustainability", "climate", "ecology", "biodiversity", "carbon"],
-    titles: ["environment officer"]
-  }
+// Sector descriptions for embedding comparison
+const SECTOR_DESCRIPTIONS = {
+  technology: "software engineering, programming, data science, AI, cloud computing, cybersecurity",
+  media: "journalism, broadcasting, content creation, film, TV, radio, digital media",
+  business: "management, strategy, consulting, operations, finance, commercial roles",
+  education: "teaching, lecturing, tutoring, schools, universities, curriculum development",
+  health: "nursing, medicine, clinical roles, healthcare, mental health, NHS",
+  arts: "creative design, illustration, music, theatre, performance, graphic design",
+  sport: "coaching, athletics, fitness, physical education, sports training",
+  environment: "sustainability, climate science, ecology, biodiversity, renewable energy"
 };
 
-// Balanced fallback pair
-const fallbackPair = ["business", "technology"];
+// Load embedding model once (cached across invocations)
+let embedder = null;
 
-// Weighted scoring function
-function scoreSector(text, title, sector) {
-  const lowerText = text.toLowerCase();
-  const lowerTitle = title.toLowerCase();
-  const signals = sectorSignals[sector];
-
-  let score = 0;
-
-  // Strong phrases (weight 5)
-  signals.strong.forEach(phrase => {
-    if (lowerText.includes(phrase)) score += 5;
-  });
-
-  // Job title patterns (weight 4)
-  signals.titles.forEach(t => {
-    if (lowerTitle.includes(t)) score += 4;
-  });
-
-  // Keywords (weight 2)
-  signals.keywords.forEach(kw => {
-    if (lowerText.includes(kw)) score += 2;
-  });
-
-  return score;
+async function loadEmbedder() {
+  if (!embedder) {
+    embedder = await pipeline("feature-extraction", "Xenova/all-MiniLM-L6-v2");
+  }
+  return embedder;
 }
 
-// Determine top two sectors
-function classifySectors(title, description) {
-  const text = `${title} ${description || ""}`;
-  const scores = [];
+// Cosine similarity
+function cosineSimilarity(a, b) {
+  const dot = a.reduce((sum, v, i) => sum + v * b[i], 0);
+  const magA = Math.sqrt(a.reduce((sum, v) => sum + v * v, 0));
+  const magB = Math.sqrt(b.reduce((sum, v) => sum + v * v, 0));
+  return dot / (magA * magB);
+}
 
-  for (const sector of validSectors) {
-    const score = scoreSector(text, title, sector);
-    if (score > 0) scores.push({ sector, score });
+// AI classification
+async function classifySectorsAI(title, description) {
+  const embed = await loadEmbedder();
+
+  const text = `${title}. ${description || ""}`;
+
+  // Embed job text
+  const jobEmbedding = (await embed(text, { pooling: "mean", normalize: true })).data;
+
+  // Embed sectors
+  const sectorScores = [];
+
+  for (const sector of SECTORS) {
+    const sectorEmbedding = (
+      await embed(SECTOR_DESCRIPTIONS[sector], { pooling: "mean", normalize: true })
+    ).data;
+
+    const score = cosineSimilarity(jobEmbedding, sectorEmbedding);
+    sectorScores.push({ sector, score });
   }
 
-  // No matches → fallback
-  if (scores.length === 0) return fallbackPair;
+  // Sort by similarity
+  sectorScores.sort((a, b) => b.score - a.score);
 
-  // Sort by score descending
-  scores.sort((a, b) => b.score - a.score);
+  // Top 2 unique sectors
+  const topTwo = [...new Set(sectorScores.map(s => s.sector))].slice(0, 2);
 
-  // Return top two unique sectors
-  const unique = [...new Set(scores.map(s => s.sector))];
-  return unique.slice(0, 2).length === 1
-    ? [unique[0], fallbackPair[1]]
-    : unique.slice(0, 2);
+  // Fallback if needed
+  if (topTwo.length < 2) return ["business", "technology"];
+
+  return topTwo;
 }
 
 // --------------------------------------
@@ -135,10 +105,11 @@ async function fetchBBCJobs() {
   const data = await response.json();
   const items = data?.data || [];
 
-  return items.map((job) => {
-    const sectors = classifySectors(job.title, job.description);
+  const results = [];
+  for (const job of items) {
+    const sectors = await classifySectorsAI(job.title, job.description);
 
-    return {
+    results.push({
       id: `bbc-${job.id}`,
       title: job.title,
       company: "BBC",
@@ -148,8 +119,10 @@ async function fetchBBCJobs() {
       category: "job",
       description: job.description || "",
       sectorPair: sectors
-    };
-  });
+    });
+  }
+
+  return results;
 }
 
 // --------------------------------------
@@ -163,11 +136,13 @@ async function fetchGuardianJobs() {
   const parsed = await xml2js.parseStringPromise(xml, { explicitArray: false });
   const items = parsed?.rss?.channel?.item || [];
 
-  return items.map((item, index) => {
-    const sectors = classifySectors(item.title, item.description);
+  const results = [];
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    const sectors = await classifySectorsAI(item.title, item.description);
 
-    return {
-      id: `guardian-${index}`,
+    results.push({
+      id: `guardian-${i}`,
       title: item.title,
       company: "The Guardian",
       location: "UK",
@@ -176,15 +151,17 @@ async function fetchGuardianJobs() {
       category: "job",
       description: item.description,
       sectorPair: sectors
-    };
-  });
+    });
+  }
+
+  return results;
 }
 
 // --------------------------------------
 // EXAMPLE SOURCE
 // --------------------------------------
 async function fetchExampleJobs() {
-  const sectors = classifySectors("Example Job", "This is a placeholder job.");
+  const sectors = await classifySectorsAI("Example Job", "This is a placeholder job.");
 
   return [
     {
