@@ -1,11 +1,11 @@
 const fetch = require("node-fetch");
 const xml2js = require("xml2js");
+const cheerio = require("cheerio");
 
-// --------------------------------------
-// AI SECTOR CLASSIFIER (EMBEDDING-BASED)
-// --------------------------------------
+// ------------------------------
+// AI CLASSIFIER (dynamic import)
+// ------------------------------
 
-// Lovable’s allowed sectors
 const SECTORS = [
   "technology",
   "media",
@@ -17,7 +17,6 @@ const SECTORS = [
   "environment"
 ];
 
-// Sector descriptions for embedding comparison
 const SECTOR_DESCRIPTIONS = {
   technology: "software engineering, programming, data science, AI, cloud computing, cybersecurity",
   media: "journalism, broadcasting, content creation, film, TV, radio, digital media",
@@ -29,7 +28,6 @@ const SECTOR_DESCRIPTIONS = {
   environment: "sustainability, climate science, ecology, biodiversity, renewable energy"
 };
 
-// Lazy-loaded embedder
 let embedder = null;
 
 async function loadEmbedder() {
@@ -40,50 +38,43 @@ async function loadEmbedder() {
   return embedder;
 }
 
-// Cosine similarity
 function cosineSimilarity(a, b) {
   const dot = a.reduce((sum, v, i) => sum + v * b[i], 0);
-  const magA = Math.sqrt(a.reduce((sum, v) => sum + v * v, 0));
-  const magB = Math.sqrt(b.reduce((sum, v) => sum + v * v, 0));
+  const magA = Math.sqrt(a.reduce((s, v) => s + v * v, 0));
+  const magB = Math.sqrt(b.reduce((s, v) => s + v * v, 0));
   return dot / (magA * magB);
 }
 
-// AI classification
 async function classifySectorsAI(title, description) {
   const embed = await loadEmbedder();
-
   const text = `${title}. ${description || ""}`;
 
-  // Embed job text
   const jobEmbedding = (await embed(text, { pooling: "mean", normalize: true })).data;
 
-  // Embed sectors
-  const sectorScores = [];
+  const scores = [];
 
   for (const sector of SECTORS) {
     const sectorEmbedding = (
       await embed(SECTOR_DESCRIPTIONS[sector], { pooling: "mean", normalize: true })
     ).data;
 
-    const score = cosineSimilarity(jobEmbedding, sectorEmbedding);
-    sectorScores.push({ sector, score });
+    scores.push({
+      sector,
+      score: cosineSimilarity(jobEmbedding, sectorEmbedding)
+    });
   }
 
-  // Sort by similarity
-  sectorScores.sort((a, b) => b.score - a.score);
+  scores.sort((a, b) => b.score - a.score);
 
-  // Top 2 unique sectors
-  const topTwo = [...new Set(sectorScores.map(s => s.sector))].slice(0, 2);
+  const topTwo = [...new Set(scores.map(s => s.sector))].slice(0, 2);
 
-  // Fallback if needed
-  if (topTwo.length < 2) return ["business", "technology"];
-
-  return topTwo;
+  return topTwo.length === 2 ? topTwo : ["business", "technology"];
 }
 
-// --------------------------------------
-// SAFE FETCH WRAPPER
-// --------------------------------------
+// ------------------------------
+// HELPERS
+// ------------------------------
+
 async function safeFetch(fn, label) {
   try {
     return await fn();
@@ -93,55 +84,123 @@ async function safeFetch(fn, label) {
   }
 }
 
-// --------------------------------------
-// BBC JOBS (JSON API)
-// --------------------------------------
-async function fetchBBCJobs() {
-  const url = "https://careers.api.bbc.com/v1/jobs/search?limit=50";
+async function fetchHTML(url) {
+  const res = await fetch(url);
+  return await res.text();
+}
 
-  const response = await fetch(url);
-  if (!response.ok) throw new Error("BBC API request failed");
+// ------------------------------
+// BBC MAIN JOB SCRAPER (50 jobs)
+// ------------------------------
 
-  const data = await response.json();
-  const items = data?.data || [];
+async function fetchBBCMainJobs() {
+  const jobs = [];
 
-  const results = [];
-  for (const job of items) {
-    const sectors = await classifySectorsAI(job.title, job.description);
+  for (let page = 1; page <= 5; page++) {
+    const url = `https://careerssearch.bbc.co.uk/jobs/search?page=${page}`;
+    const html = await fetchHTML(url);
+    const $ = cheerio.load(html);
 
-    results.push({
-      id: `bbc-${job.id}`,
-      title: job.title,
-      company: "BBC",
-      location: job.location?.city || "Unknown",
-      salary: job.salary || null,
-      applyUrl: `https://careers.bbc.co.uk/job/${job.id}`,
-      category: "job",
-      description: job.description || "",
-      sectorPair: sectors
+    $(".lister__item").each((_, el) => {
+      if (jobs.length >= 50) return;
+
+      const title = $(el).find(".lister__header a").text().trim();
+      const link = "https://careerssearch.bbc.co.uk" + $(el).find(".lister__header a").attr("href");
+      const location = $(el).find(".lister__meta-item").first().text().trim();
+      const summary = $(el).find(".lister__body").text().trim();
+
+      jobs.push({
+        id: `bbc-main-${jobs.length}`,
+        title,
+        company: "BBC",
+        location,
+        applyUrl: link,
+        description: summary || null
+      });
     });
   }
 
-  return results;
+  // Fetch full descriptions if summary missing
+  for (const job of jobs) {
+    if (!job.description) {
+      try {
+        const html = await fetchHTML(job.applyUrl);
+        const $ = cheerio.load(html);
+        job.description = $(".job__description").text().trim() || "";
+      } catch {}
+    }
+
+    job.sectorPair = await classifySectorsAI(job.title, job.description);
+    job.category = "job";
+    job.salary = null;
+  }
+
+  return jobs;
 }
 
 // --------------------------------------
-// GUARDIAN JOBS (RSS)
+// BBC EARLY CAREERS SCRAPER
 // --------------------------------------
+
+async function fetchBBCEarlyCareers() {
+  const url = "https://www.bbc.co.uk/careers/trainee-schemes-and-apprenticeships";
+  const html = await fetchHTML(url);
+  const $ = cheerio.load(html);
+
+  const jobs = [];
+
+  $(".promo").each((i, el) => {
+    const title = $(el).find(".promo__title").text().trim();
+    const link = $(el).find("a").attr("href");
+    const summary = $(el).find(".promo__summary").text().trim();
+
+    if (!title || !link) return;
+
+    jobs.push({
+      id: `bbc-early-${i}`,
+      title,
+      company: "BBC Early Careers",
+      location: "UK",
+      applyUrl: link.startsWith("http") ? link : "https://www.bbc.co.uk" + link,
+      description: summary || null
+    });
+  });
+
+  // Fetch full descriptions if needed
+  for (const job of jobs) {
+    if (!job.description) {
+      try {
+        const html = await fetchHTML(job.applyUrl);
+        const $ = cheerio.load(html);
+        job.description = $("main").text().trim() || "";
+      } catch {}
+    }
+
+    job.sectorPair = await classifySectorsAI(job.title, job.description);
+    job.category = "job";
+    job.salary = null;
+  }
+
+  return jobs;
+}
+
+// ------------------------------
+// GUARDIAN JOBS (RSS)
+// ------------------------------
+
 async function fetchGuardianJobs() {
   const url = "https://jobs.theguardian.com/jobsrss/";
-  const response = await fetch(url);
-  const xml = await response.text();
+  const xml = await fetchHTML(url);
 
   const parsed = await xml2js.parseStringPromise(xml, { explicitArray: false });
   const items = parsed?.rss?.channel?.item || [];
 
-  const results = [];
+  const jobs = [];
+
   for (let i = 0; i < items.length; i++) {
     const item = items[i];
-    const sectors = await classifySectorsAI(item.title, item.description);
 
-    results.push({
+    const job = {
       id: `guardian-${i}`,
       title: item.title,
       company: "The Guardian",
@@ -149,20 +208,22 @@ async function fetchGuardianJobs() {
       salary: null,
       applyUrl: item.link,
       category: "job",
-      description: item.description,
-      sectorPair: sectors
-    });
+      description: item.description || ""
+    };
+
+    job.sectorPair = await classifySectorsAI(job.title, job.description);
+    jobs.push(job);
   }
 
-  return results;
+  return jobs;
 }
 
-// --------------------------------------
-// EXAMPLE SOURCE
-// --------------------------------------
+// ------------------------------
+// EXAMPLE JOB
+// ------------------------------
+
 async function fetchExampleJobs() {
   const sectors = await classifySectorsAI("Example Job", "This is a placeholder job.");
-
   return [
     {
       id: "example-001",
@@ -178,15 +239,17 @@ async function fetchExampleJobs() {
   ];
 }
 
-// --------------------------------------
+// ------------------------------
 // MAIN HANDLER
-// --------------------------------------
-exports.handler = async () => {
-  const bbcJobs = await safeFetch(fetchBBCJobs, "BBC Jobs");
-  const guardianJobs = await safeFetch(fetchGuardianJobs, "Guardian Jobs");
-  const exampleJobs = await safeFetch(fetchExampleJobs, "Example Jobs");
+// ------------------------------
 
-  const allJobs = [...bbcJobs, ...guardianJobs, ...exampleJobs];
+exports.handler = async () => {
+  const bbcMain = await safeFetch(fetchBBCMainJobs, "BBC Main Jobs");
+  const bbcEarly = await safeFetch(fetchBBCEarlyCareers, "BBC Early Careers");
+  const guardian = await safeFetch(fetchGuardianJobs, "Guardian Jobs");
+  const example = await safeFetch(fetchExampleJobs, "Example Jobs");
+
+  const allJobs = [...bbcMain, ...bbcEarly, ...guardian, ...example];
 
   return {
     statusCode: 200,
