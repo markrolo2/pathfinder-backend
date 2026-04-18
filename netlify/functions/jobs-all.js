@@ -1,11 +1,20 @@
+// netlify/functions/jobs-all.js
+
 const fetch = require("node-fetch");
 const xml2js = require("xml2js");
 const cheerio = require("cheerio");
+const OpenAI = require("openai");
 
 // ------------------------------
-// AI CLASSIFIER (dynamic import)
+// OPENAI CLIENT
 // ------------------------------
+const client = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY
+});
 
+// ------------------------------
+// SECTOR DEFINITIONS
+// ------------------------------
 const SECTORS = [
   "technology",
   "media",
@@ -28,36 +37,34 @@ const SECTOR_DESCRIPTIONS = {
   environment: "sustainability, climate science, ecology, biodiversity, renewable energy"
 };
 
-let embedder = null;
-
-async function loadEmbedder() {
-  if (!embedder) {
-    const { pipeline } = await import("@xenova/transformers");
-    embedder = await pipeline("feature-extraction", "Xenova/all-MiniLM-L6-v2");
-  }
-  return embedder;
+// ------------------------------
+// EMBEDDINGS (OpenAI)
+// ------------------------------
+async function embed(text) {
+  const res = await client.embeddings.create({
+    model: "text-embedding-3-small",
+    input: text,
+    encoding_format: "float"
+  });
+  return res.data[0].embedding;
 }
 
 function cosineSimilarity(a, b) {
-  const dot = a.reduce((sum, v, i) => sum + v * b[i], 0);
-  const magA = Math.sqrt(a.reduce((s, v) => s + v * v, 0));
-  const magB = Math.sqrt(b.reduce((s, v) => s + v * v, 0));
-  return dot / (magA * magB);
+  return a.reduce((sum, v, i) => sum + v * b[i], 0);
 }
 
+// ------------------------------
+// CLASSIFIER USING OPENAI
+// ------------------------------
 async function classifySectorsAI(title, description) {
-  const embed = await loadEmbedder();
   const text = `${title}. ${description || ""}`;
 
-  const jobEmbedding = (await embed(text, { pooling: "mean", normalize: true })).data;
+  const jobEmbedding = await embed(text);
 
   const scores = [];
 
   for (const sector of SECTORS) {
-    const sectorEmbedding = (
-      await embed(SECTOR_DESCRIPTIONS[sector], { pooling: "mean", normalize: true })
-    ).data;
-
+    const sectorEmbedding = await embed(SECTOR_DESCRIPTIONS[sector]);
     scores.push({
       sector,
       score: cosineSimilarity(jobEmbedding, sectorEmbedding)
@@ -66,7 +73,7 @@ async function classifySectorsAI(title, description) {
 
   scores.sort((a, b) => b.score - a.score);
 
-  const topTwo = [...new Set(scores.map(s => s.sector))].slice(0, 2);
+  const topTwo = scores.slice(0, 2).map(s => s.sector);
 
   return topTwo.length === 2 ? topTwo : ["business", "technology"];
 }
@@ -74,7 +81,6 @@ async function classifySectorsAI(title, description) {
 // ------------------------------
 // HELPERS
 // ------------------------------
-
 async function safeFetch(fn, label) {
   try {
     return await fn();
@@ -90,92 +96,35 @@ async function fetchHTML(url) {
 }
 
 // ------------------------------
-// BBC MAIN JOB SCRAPER (50 jobs)
+// BBC SCRAPER (UPDATED DOMAIN)
 // ------------------------------
-
 async function fetchBBCMainJobs() {
   const jobs = [];
 
-  for (let page = 1; page <= 5; page++) {
-    const url = `https://careerssearch.bbc.co.uk/jobs/search?page=${page}`;
-    const html = await fetchHTML(url);
-    const $ = cheerio.load(html);
-
-    $(".lister__item").each((_, el) => {
-      if (jobs.length >= 50) return;
-
-      const title = $(el).find(".lister__header a").text().trim();
-      const link = "https://careerssearch.bbc.co.uk" + $(el).find(".lister__header a").attr("href");
-      const location = $(el).find(".lister__meta-item").first().text().trim();
-      const summary = $(el).find(".lister__body").text().trim();
-
-      jobs.push({
-        id: `bbc-main-${jobs.length}`,
-        title,
-        company: "BBC",
-        location,
-        applyUrl: link,
-        description: summary || null
-      });
-    });
-  }
-
-  // Fetch full descriptions if summary missing
-  for (const job of jobs) {
-    if (!job.description) {
-      try {
-        const html = await fetchHTML(job.applyUrl);
-        const $ = cheerio.load(html);
-        job.description = $(".job__description").text().trim() || "";
-      } catch {}
-    }
-
-    job.sectorPair = await classifySectorsAI(job.title, job.description);
-    job.category = "job";
-    job.salary = null;
-  }
-
-  return jobs;
-}
-
-// --------------------------------------
-// BBC EARLY CAREERS SCRAPER
-// --------------------------------------
-
-async function fetchBBCEarlyCareers() {
-  const url = "https://www.bbc.co.uk/careers/trainee-schemes-and-apprenticeships";
+  const url = "https://careers.bbc.co.uk/search-results";
   const html = await fetchHTML(url);
   const $ = cheerio.load(html);
 
-  const jobs = [];
-
-  $(".promo").each((i, el) => {
-    const title = $(el).find(".promo__title").text().trim();
+  $(".search-result").each((i, el) => {
+    const title = $(el).find(".search-result__title").text().trim();
     const link = $(el).find("a").attr("href");
-    const summary = $(el).find(".promo__summary").text().trim();
+    const location = $(el).find(".search-result__location").text().trim();
+    const summary = $(el).find(".search-result__snippet").text().trim();
 
     if (!title || !link) return;
 
     jobs.push({
-      id: `bbc-early-${i}`,
+      id: `bbc-${i}`,
       title,
-      company: "BBC Early Careers",
-      location: "UK",
-      applyUrl: link.startsWith("http") ? link : "https://www.bbc.co.uk" + link,
-      description: summary || null
+      company: "BBC",
+      location,
+      applyUrl: link.startsWith("http") ? link : "https://careers.bbc.co.uk" + link,
+      description: summary || ""
     });
   });
 
-  // Fetch full descriptions if needed
+  // Classify
   for (const job of jobs) {
-    if (!job.description) {
-      try {
-        const html = await fetchHTML(job.applyUrl);
-        const $ = cheerio.load(html);
-        job.description = $("main").text().trim() || "";
-      } catch {}
-    }
-
     job.sectorPair = await classifySectorsAI(job.title, job.description);
     job.category = "job";
     job.salary = null;
@@ -187,7 +136,6 @@ async function fetchBBCEarlyCareers() {
 // ------------------------------
 // GUARDIAN JOBS (RSS)
 // ------------------------------
-
 async function fetchGuardianJobs() {
   const url = "https://jobs.theguardian.com/jobsrss/";
   const xml = await fetchHTML(url);
@@ -221,7 +169,6 @@ async function fetchGuardianJobs() {
 // ------------------------------
 // EXAMPLE JOB
 // ------------------------------
-
 async function fetchExampleJobs() {
   const sectors = await classifySectorsAI("Example Job", "This is a placeholder job.");
   return [
@@ -242,14 +189,12 @@ async function fetchExampleJobs() {
 // ------------------------------
 // MAIN HANDLER
 // ------------------------------
-
 exports.handler = async () => {
   const bbcMain = await safeFetch(fetchBBCMainJobs, "BBC Main Jobs");
-  const bbcEarly = await safeFetch(fetchBBCEarlyCareers, "BBC Early Careers");
   const guardian = await safeFetch(fetchGuardianJobs, "Guardian Jobs");
   const example = await safeFetch(fetchExampleJobs, "Example Jobs");
 
-  const allJobs = [...bbcMain, ...bbcEarly, ...guardian, ...example];
+  const allJobs = [...bbcMain, ...guardian, ...example];
 
   return {
     statusCode: 200,
