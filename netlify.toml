@@ -2,4 +2,10 @@
   directory = "netlify/functions"
   external_node_modules = ["@xenova/transformers"]
   node_bundler = "esbuild"
+
+# Run the scraper once per day at 3am UTC
+[[scheduled]]
+  name = "daily-scrape"
+  cron = "0 3 * * *"
+
   
