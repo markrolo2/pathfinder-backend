@@ -1,9 +1,8 @@
 [functions]
   directory = "netlify/functions"
   node_bundler = "esbuild"
-  external_node_modules = ["@xenova/transformers"]
-  ignored_node_modules = ["@xenova/transformers"]
 
+# Run the daily trigger once per day at 3am UTC
 [[scheduled]]
-  name = "daily-scrape"
-  cron = "0 3 * * *"  
+  name = "daily-trigger"
+  cron = "0 3 * * *"

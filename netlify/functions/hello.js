@@ -1,8 +1,7 @@
-// netlify/functions/hello.js
-
-export const handler = async () => {
+exports.handler = async () => {
   return {
     statusCode: 200,
-    body: JSON.stringify({ message: "Hello from Netlify Functions!" })
-  };
-};
+    body: JSON.stringify({ message: "Netlify functions are working" })
+  }
+}
+
