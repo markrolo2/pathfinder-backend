@@ -33,7 +33,11 @@ let embedder = null;
 async function loadEmbedder() {
   if (!embedder) {
     const { pipeline } = await import("@xenova/transformers");
-    embedder = await pipeline("feature-extraction", "Xenova/all-MiniLM-L6-v2");
+    // ✅ Dynamic model load with caching
+    embedder = await pipeline("feature-extraction", "Xenova/all-MiniLM-L6-v2", {
+      revision: "main",
+      cache_dir: "/tmp" // Netlify’s temporary storage
+    });
   }
   return embedder;
 }
@@ -120,7 +124,6 @@ async function fetchBBCMainJobs() {
     });
   }
 
-  // Fetch full descriptions if summary missing
   for (const job of jobs) {
     if (!job.description) {
       try {
@@ -166,7 +169,6 @@ async function fetchBBCEarlyCareers() {
     });
   });
 
-  // Fetch full descriptions if needed
   for (const job of jobs) {
     if (!job.description) {
       try {
