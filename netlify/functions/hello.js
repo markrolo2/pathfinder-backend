@@ -4,4 +4,3 @@ exports.handler = async () => {
     body: JSON.stringify({ message: "Netlify functions are working" })
   }
 }
-

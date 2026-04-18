@@ -3,15 +3,7 @@ const xml2js = require("xml2js");
 const cheerio = require("cheerio");
 
 // ------------------------------
-// CONFIG
-// ------------------------------
-
-const MAX_BBC_JOBS = 20;
-const CONCURRENCY = 5; // limit parallel embedding calls
-const GLOBAL_TIMEOUT_MS = 20000; // 20s safety cutoff
-
-// ------------------------------
-// SECTOR DEFINITIONS
+// AI CLASSIFIER (dynamic import)
 // ------------------------------
 
 const SECTORS = [
@@ -36,12 +28,7 @@ const SECTOR_DESCRIPTIONS = {
   environment: "sustainability, climate science, ecology, biodiversity, renewable energy"
 };
 
-// ------------------------------
-// EMBEDDING PIPELINE (cached)
-// ------------------------------
-
 let embedder = null;
-let cachedSectorEmbeddings = null;
 
 async function loadEmbedder() {
   if (!embedder) {
@@ -51,48 +38,37 @@ async function loadEmbedder() {
   return embedder;
 }
 
-async function getSectorEmbeddings() {
-  if (cachedSectorEmbeddings) return cachedSectorEmbeddings;
-
-  const embed = await loadEmbedder();
-  cachedSectorEmbeddings = {};
-
-  for (const sector of SECTORS) {
-    const emb = await embed(SECTOR_DESCRIPTIONS[sector], {
-      pooling: "mean",
-      normalize: true
-    });
-    cachedSectorEmbeddings[sector] = emb.data;
-  }
-
-  return cachedSectorEmbeddings;
-}
-
 function cosineSimilarity(a, b) {
-  let dot = 0, magA = 0, magB = 0;
-  for (let i = 0; i < a.length; i++) {
-    dot += a[i] * b[i];
-    magA += a[i] * a[i];
-    magB += b[i] * b[i];
-  }
-  return dot / (Math.sqrt(magA) * Math.sqrt(magB));
+  const dot = a.reduce((sum, v, i) => sum + v * b[i], 0);
+  const magA = Math.sqrt(a.reduce((s, v) => s + v * v, 0));
+  const magB = Math.sqrt(b.reduce((s, v) => s + v * v, 0));
+  return dot / (magA * magB);
 }
 
 async function classifySectorsAI(title, description) {
   const embed = await loadEmbedder();
-  const sectorEmbeddings = await getSectorEmbeddings();
-
   const text = `${title}. ${description || ""}`;
+
   const jobEmbedding = (await embed(text, { pooling: "mean", normalize: true })).data;
 
-  const scores = Object.entries(sectorEmbeddings).map(([sector, emb]) => ({
-    sector,
-    score: cosineSimilarity(jobEmbedding, emb)
-  }));
+  const scores = [];
+
+  for (const sector of SECTORS) {
+    const sectorEmbedding = (
+      await embed(SECTOR_DESCRIPTIONS[sector], { pooling: "mean", normalize: true })
+    ).data;
+
+    scores.push({
+      sector,
+      score: cosineSimilarity(jobEmbedding, sectorEmbedding)
+    });
+  }
 
   scores.sort((a, b) => b.score - a.score);
 
-  return scores.slice(0, 2).map(s => s.sector);
+  const topTwo = [...new Set(scores.map(s => s.sector))].slice(0, 2);
+
+  return topTwo.length === 2 ? topTwo : ["business", "technology"];
 }
 
 // ------------------------------
@@ -109,43 +85,24 @@ async function safeFetch(fn, label) {
 }
 
 async function fetchHTML(url) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 5000);
-
-  try {
-    const res = await fetch(url, { signal: controller.signal });
-    return await res.text();
-  } catch {
-    return "";
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-async function processInBatches(items, fn, batchSize = CONCURRENCY) {
-  const results = [];
-  for (let i = 0; i < items.length; i += batchSize) {
-    const batch = items.slice(i, i + batchSize);
-    const batchResults = await Promise.all(batch.map(fn));
-    results.push(...batchResults);
-  }
-  return results;
+  const res = await fetch(url);
+  return await res.text();
 }
 
 // ------------------------------
-// BBC MAIN JOB SCRAPER (20 jobs)
+// BBC MAIN JOB SCRAPER (50 jobs)
 // ------------------------------
 
 async function fetchBBCMainJobs() {
   const jobs = [];
 
-  for (let page = 1; page <= 5 && jobs.length < MAX_BBC_JOBS; page++) {
+  for (let page = 1; page <= 5; page++) {
     const url = `https://careerssearch.bbc.co.uk/jobs/search?page=${page}`;
     const html = await fetchHTML(url);
     const $ = cheerio.load(html);
 
     $(".lister__item").each((_, el) => {
-      if (jobs.length >= MAX_BBC_JOBS) return;
+      if (jobs.length >= 50) return;
 
       const title = $(el).find(".lister__header a").text().trim();
       const link = "https://careerssearch.bbc.co.uk" + $(el).find(".lister__header a").attr("href");
@@ -158,18 +115,25 @@ async function fetchBBCMainJobs() {
         company: "BBC",
         location,
         applyUrl: link,
-        description: summary || ""
+        description: summary || null
       });
     });
   }
 
-  // classify in batches
-  await processInBatches(jobs, async job => {
+  // Fetch full descriptions if summary missing
+  for (const job of jobs) {
+    if (!job.description) {
+      try {
+        const html = await fetchHTML(job.applyUrl);
+        const $ = cheerio.load(html);
+        job.description = $(".job__description").text().trim() || "";
+      } catch {}
+    }
+
     job.sectorPair = await classifySectorsAI(job.title, job.description);
     job.category = "job";
     job.salary = null;
-    return job;
-  });
+  }
 
   return jobs;
 }
@@ -198,16 +162,24 @@ async function fetchBBCEarlyCareers() {
       company: "BBC Early Careers",
       location: "UK",
       applyUrl: link.startsWith("http") ? link : "https://www.bbc.co.uk" + link,
-      description: summary || ""
+      description: summary || null
     });
   });
 
-  await processInBatches(jobs, async job => {
+  // Fetch full descriptions if needed
+  for (const job of jobs) {
+    if (!job.description) {
+      try {
+        const html = await fetchHTML(job.applyUrl);
+        const $ = cheerio.load(html);
+        job.description = $("main").text().trim() || "";
+      } catch {}
+    }
+
     job.sectorPair = await classifySectorsAI(job.title, job.description);
     job.category = "job";
     job.salary = null;
-    return job;
-  });
+  }
 
   return jobs;
 }
@@ -223,21 +195,25 @@ async function fetchGuardianJobs() {
   const parsed = await xml2js.parseStringPromise(xml, { explicitArray: false });
   const items = parsed?.rss?.channel?.item || [];
 
-  const jobs = items.map((item, i) => ({
-    id: `guardian-${i}`,
-    title: item.title,
-    company: "The Guardian",
-    location: "UK",
-    salary: null,
-    applyUrl: item.link,
-    category: "job",
-    description: item.description || ""
-  }));
+  const jobs = [];
 
-  await processInBatches(jobs, async job => {
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+
+    const job = {
+      id: `guardian-${i}`,
+      title: item.title,
+      company: "The Guardian",
+      location: "UK",
+      salary: null,
+      applyUrl: item.link,
+      category: "job",
+      description: item.description || ""
+    };
+
     job.sectorPair = await classifySectorsAI(job.title, job.description);
-    return job;
-  });
+    jobs.push(job);
+  }
 
   return jobs;
 }
@@ -268,22 +244,12 @@ async function fetchExampleJobs() {
 // ------------------------------
 
 exports.handler = async () => {
-  const timeoutPromise = new Promise(resolve =>
-    setTimeout(() => resolve({ timeout: true }), GLOBAL_TIMEOUT_MS)
-  );
+  const bbcMain = await safeFetch(fetchBBCMainJobs, "BBC Main Jobs");
+  const bbcEarly = await safeFetch(fetchBBCEarlyCareers, "BBC Early Careers");
+  const guardian = await safeFetch(fetchGuardianJobs, "Guardian Jobs");
+  const example = await safeFetch(fetchExampleJobs, "Example Jobs");
 
-  const workPromise = (async () => {
-    const bbcMain = await safeFetch(fetchBBCMainJobs, "BBC Main Jobs");
-    const bbcEarly = await safeFetch(fetchBBCEarlyCareers, "BBC Early Careers");
-    const guardian = await safeFetch(fetchGuardianJobs, "Guardian Jobs");
-    const example = await safeFetch(fetchExampleJobs, "Example Jobs");
-
-    return [...bbcMain, ...bbcEarly, ...guardian, ...example];
-  })();
-
-  const result = await Promise.race([timeoutPromise, workPromise]);
-
-  const jobs = result.timeout ? [] : result;
+  const allJobs = [...bbcMain, ...bbcEarly, ...guardian, ...example];
 
   return {
     statusCode: 200,
@@ -292,6 +258,6 @@ exports.handler = async () => {
       "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Headers": "Content-Type"
     },
-    body: JSON.stringify(jobs)
+    body: JSON.stringify(allJobs)
   };
 };
