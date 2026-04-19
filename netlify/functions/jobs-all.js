@@ -1,6 +1,5 @@
 const fetch = require("node-fetch");
 const xml2js = require("xml2js");
-const cheerio = require("cheerio");
 
 // ------------------------------
 // SIMPLE KEYWORD CLASSIFIER
@@ -47,16 +46,6 @@ async function safeFetch(fn, label) {
   }
 }
 
-async function fetchJSON(url) {
-  try {
-    const res = await fetch(url);
-    return await res.json();
-  } catch (err) {
-    console.error("❌ fetchJSON failed:", err.message);
-    return null;
-  }
-}
-
 async function fetchHTML(url) {
   try {
     const res = await fetch(url);
@@ -65,72 +54,6 @@ async function fetchHTML(url) {
     console.error("❌ fetchHTML failed:", err.message);
     return "";
   }
-}
-
-// ------------------------------
-// BBC MAIN JOBS — JSON API
-// ------------------------------
-
-async function fetchBBCMainJobs() {
-  const jobs = [];
-  const MAX_PAGES = 3;
-
-  for (let page = 1; page <= MAX_PAGES; page++) {
-    const url = `https://careers.bbc.co.uk/api/search?page=${page}`;
-    const data = await fetchJSON(url);
-
-    if (!data || !data.results) continue;
-
-    for (const item of data.results) {
-      jobs.push({
-        id: `bbc-main-${jobs.length}`,
-        title: item.title,
-        company: "BBC",
-        location: item.location || "UK",
-        applyUrl: item.url.startsWith("http") ? item.url : "https://careers.bbc.co.uk" + item.url,
-        description: item.description || "",
-        sectorPair: classifySectorsKeyword(item.title, item.description),
-        category: "job",
-        salary: null
-      });
-    }
-  }
-
-  return jobs;
-}
-
-// --------------------------------------
-// BBC EARLY CAREERS SCRAPER (HTML)
-// --------------------------------------
-
-async function fetchBBCEarlyCareers() {
-  const url = "https://www.bbc.co.uk/careers/trainee-schemes-and-apprenticeships";
-  const html = await fetchHTML(url);
-  const $ = cheerio.load(html);
-
-  const jobs = [];
-
-  $(".promo").each((i, el) => {
-    const title = $(el).find(".promo__title").text().trim();
-    const link = $(el).find("a").attr("href");
-    const summary = $(el).find(".promo__summary").text().trim();
-
-    if (!title || !link) return;
-
-    jobs.push({
-      id: `bbc-early-${i}`,
-      title,
-      company: "BBC Early Careers",
-      location: "UK",
-      applyUrl: link.startsWith("http") ? link : "https://www.bbc.co.uk" + link,
-      description: summary || "",
-      sectorPair: classifySectorsKeyword(title, summary),
-      category: "job",
-      salary: null
-    });
-  });
-
-  return jobs;
 }
 
 // ------------------------------
@@ -187,12 +110,10 @@ async function fetchExampleJobs() {
 // ------------------------------
 
 exports.handler = async () => {
-  const bbcMain = await safeFetch(fetchBBCMainJobs, "BBC Main Jobs");
-  const bbcEarly = await safeFetch(fetchBBCEarlyCareers, "BBC Early Careers");
   const guardian = await safeFetch(fetchGuardianJobs, "Guardian Jobs");
   const example = await safeFetch(fetchExampleJobs, "Example Jobs");
 
-  const allJobs = [...bbcMain, ...bbcEarly, ...guardian, ...example];
+  const allJobs = [...guardian, ...example];
 
   return {
     statusCode: 200,
