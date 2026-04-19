@@ -68,6 +68,12 @@ async function fetchBBCMainJobs() {
   for (let page = 1; page <= 5 && jobs.length < MAX_JOBS; page++) {
     const url = `https://careers.bbc.co.uk/search?page=${page}`;
     const html = await fetchHTML(url);
+
+    // ⭐ DEBUG: Log what Netlify actually receives
+    if (page === 1) {
+      console.log("BBC HTML snippet:", html.slice(0, 500));
+    }
+
     const $ = cheerio.load(html);
 
     $(".search-results__item").each((_, el) => {
@@ -202,4 +208,3 @@ exports.handler = async () => {
     body: JSON.stringify(allJobs)
   };
 };
-
