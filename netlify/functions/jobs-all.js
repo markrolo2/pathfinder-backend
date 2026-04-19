@@ -1,3 +1,6 @@
+process.env.XENOVA_CACHE_DIR = "/tmp";
+process.env.TRANSFORMERS_CACHE = "/tmp";
+
 const fetch = require("node-fetch");
 const xml2js = require("xml2js");
 const cheerio = require("cheerio");
