@@ -47,6 +47,16 @@ async function safeFetch(fn, label) {
   }
 }
 
+async function fetchJSON(url) {
+  try {
+    const res = await fetch(url);
+    return await res.json();
+  } catch (err) {
+    console.error("❌ fetchJSON failed:", err.message);
+    return null;
+  }
+}
+
 async function fetchHTML(url) {
   try {
     const res = await fetch(url);
@@ -58,53 +68,39 @@ async function fetchHTML(url) {
 }
 
 // ------------------------------
-// BBC MAIN JOB SCRAPER (20 jobs)
+// BBC MAIN JOBS — JSON API
 // ------------------------------
 
 async function fetchBBCMainJobs() {
   const jobs = [];
-  const MAX_JOBS = 20;
+  const MAX_PAGES = 3;
 
-  for (let page = 1; page <= 5 && jobs.length < MAX_JOBS; page++) {
-    const url = `https://careers.bbc.co.uk/search?page=${page}`;
-    const html = await fetchHTML(url);
+  for (let page = 1; page <= MAX_PAGES; page++) {
+    const url = `https://careers.bbc.co.uk/api/search?page=${page}`;
+    const data = await fetchJSON(url);
 
-    // ⭐ DEBUG: Log what Netlify actually receives
-    if (page === 1) {
-      console.log("BBC HTML snippet:", html.slice(0, 500));
-    }
+    if (!data || !data.results) continue;
 
-    const $ = cheerio.load(html);
-
-    $(".search-results__item").each((_, el) => {
-      if (jobs.length >= MAX_JOBS) return;
-
-      const title = $(el).find(".search-results__item-title").text().trim();
-      const link = $(el).find("a").attr("href");
-      const location = $(el).find(".search-results__item-location").text().trim();
-      const summary = $(el).find(".search-results__item-description").text().trim();
-
-      if (!title || !link) return;
-
+    for (const item of data.results) {
       jobs.push({
         id: `bbc-main-${jobs.length}`,
-        title,
+        title: item.title,
         company: "BBC",
-        location,
-        applyUrl: link.startsWith("http") ? link : "https://careers.bbc.co.uk" + link,
-        description: summary || "",
-        sectorPair: classifySectorsKeyword(title, summary),
+        location: item.location || "UK",
+        applyUrl: item.url.startsWith("http") ? item.url : "https://careers.bbc.co.uk" + item.url,
+        description: item.description || "",
+        sectorPair: classifySectorsKeyword(item.title, item.description),
         category: "job",
         salary: null
       });
-    });
+    }
   }
 
   return jobs;
 }
 
 // --------------------------------------
-// BBC EARLY CAREERS SCRAPER
+// BBC EARLY CAREERS SCRAPER (HTML)
 // --------------------------------------
 
 async function fetchBBCEarlyCareers() {
