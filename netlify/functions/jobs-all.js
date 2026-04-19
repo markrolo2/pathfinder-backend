@@ -1,3 +1,4 @@
+// Force Xenova to use Netlify's writable temp directory
 process.env.XENOVA_CACHE_DIR = "/tmp";
 process.env.TRANSFORMERS_CACHE = "/tmp";
 
@@ -35,8 +36,8 @@ let embedder = null;
 
 async function loadEmbedder() {
   if (!embedder) {
-    const { pipeline } = await import("@xenova/transformers");
-    embedder = await pipeline("feature-extraction", "Xenova/all-MiniLM-L6-v2");
+    const mod = await import("@xenova/transformers");
+    embedder = await mod.pipeline("feature-extraction", "Xenova/all-MiniLM-L6-v2");
   }
   return embedder;
 }
@@ -88,51 +89,50 @@ async function safeFetch(fn, label) {
 }
 
 async function fetchHTML(url) {
-  const res = await fetch(url);
-  return await res.text();
+  try {
+    const res = await fetch(url);
+    return await res.text();
+  } catch (err) {
+    console.error("❌ fetchHTML failed:", err.message);
+    return "";
+  }
 }
 
 // ------------------------------
-// BBC MAIN JOB SCRAPER (50 jobs)
+// BBC MAIN JOB SCRAPER (20 jobs)
 // ------------------------------
 
 async function fetchBBCMainJobs() {
   const jobs = [];
+  const MAX_JOBS = 20;
 
-  for (let page = 1; page <= 5; page++) {
-    const url = `https://careerssearch.bbc.co.uk/jobs/search?page=${page}`;
+  for (let page = 1; page <= 5 && jobs.length < MAX_JOBS; page++) {
+    const url = `https://careers.bbc.co.uk/search?page=${page}`;
     const html = await fetchHTML(url);
     const $ = cheerio.load(html);
 
-    $(".lister__item").each((_, el) => {
-      if (jobs.length >= 50) return;
+    $(".search-results__item").each((_, el) => {
+      if (jobs.length >= MAX_JOBS) return;
 
-      const title = $(el).find(".lister__header a").text().trim();
-      const link = "https://careerssearch.bbc.co.uk" + $(el).find(".lister__header a").attr("href");
-      const location = $(el).find(".lister__meta-item").first().text().trim();
-      const summary = $(el).find(".lister__body").text().trim();
+      const title = $(el).find(".search-results__item-title").text().trim();
+      const link = $(el).find("a").attr("href");
+      const location = $(el).find(".search-results__item-location").text().trim();
+      const summary = $(el).find(".search-results__item-description").text().trim();
+
+      if (!title || !link) return;
 
       jobs.push({
         id: `bbc-main-${jobs.length}`,
         title,
         company: "BBC",
         location,
-        applyUrl: link,
-        description: summary || null
+        applyUrl: link.startsWith("http") ? link : "https://careers.bbc.co.uk" + link,
+        description: summary || ""
       });
     });
   }
 
-  // Fetch full descriptions if summary missing
   for (const job of jobs) {
-    if (!job.description) {
-      try {
-        const html = await fetchHTML(job.applyUrl);
-        const $ = cheerio.load(html);
-        job.description = $(".job__description").text().trim() || "";
-      } catch {}
-    }
-
     job.sectorPair = await classifySectorsAI(job.title, job.description);
     job.category = "job";
     job.salary = null;
@@ -165,20 +165,11 @@ async function fetchBBCEarlyCareers() {
       company: "BBC Early Careers",
       location: "UK",
       applyUrl: link.startsWith("http") ? link : "https://www.bbc.co.uk" + link,
-      description: summary || null
+      description: summary || ""
     });
   });
 
-  // Fetch full descriptions if needed
   for (const job of jobs) {
-    if (!job.description) {
-      try {
-        const html = await fetchHTML(job.applyUrl);
-        const $ = cheerio.load(html);
-        job.description = $("main").text().trim() || "";
-      } catch {}
-    }
-
     job.sectorPair = await classifySectorsAI(job.title, job.description);
     job.category = "job";
     job.salary = null;
@@ -194,6 +185,11 @@ async function fetchBBCEarlyCareers() {
 async function fetchGuardianJobs() {
   const url = "https://jobs.theguardian.com/jobsrss/";
   const xml = await fetchHTML(url);
+
+  if (!xml || xml.trim() === "") {
+    console.error("❌ Guardian RSS returned empty XML");
+    return [];
+  }
 
   const parsed = await xml2js.parseStringPromise(xml, { explicitArray: false });
   const items = parsed?.rss?.channel?.item || [];
