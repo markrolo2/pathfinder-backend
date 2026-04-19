@@ -2,35 +2,72 @@ const fetch = require("node-fetch");
 const xml2js = require("xml2js");
 
 // ------------------------------
-// SIMPLE KEYWORD CLASSIFIER
+// AI CLASSIFIER (dynamic import)
 // ------------------------------
 
-const SECTOR_KEYWORDS = {
-  technology: ["software", "developer", "engineer", "data", "cloud", "cyber", "AI", "IT"],
-  media: ["journalism", "editor", "broadcast", "content", "film", "tv", "radio", "digital"],
-  business: ["manager", "strategy", "consultant", "finance", "operations", "commercial"],
-  education: ["teacher", "school", "lecturer", "tutor", "curriculum", "education"],
-  health: ["nurse", "doctor", "clinical", "healthcare", "mental health", "NHS"],
-  arts: ["design", "creative", "illustrator", "music", "theatre", "graphic"],
-  sport: ["coach", "fitness", "athlete", "sport"],
-  environment: ["sustainability", "climate", "ecology", "renewable", "environment"]
+const SECTORS = [
+  "technology",
+  "media",
+  "business",
+  "education",
+  "health",
+  "arts",
+  "sport",
+  "environment"
+];
+
+const SECTOR_DESCRIPTIONS = {
+  technology: "software engineering, programming, data science, AI, cloud computing, cybersecurity",
+  media: "journalism, broadcasting, content creation, film, TV, radio, digital media",
+  business: "management, strategy, consulting, operations, finance, commercial roles",
+  education: "teaching, lecturing, tutoring, schools, universities, curriculum development",
+  health: "nursing, medicine, clinical roles, healthcare, mental health, NHS",
+  arts: "creative design, illustration, music, theatre, performance, graphic design",
+  sport: "coaching, athletics, fitness, physical education, sports training",
+  environment: "sustainability, climate science, ecology, biodiversity, renewable energy"
 };
 
-function classifySectorsKeyword(title, description) {
-  const text = `${title} ${description}`.toLowerCase();
-  const scores = {};
+let embedder = null;
 
-  for (const [sector, keywords] of Object.entries(SECTOR_KEYWORDS)) {
-    scores[sector] = keywords.reduce(
-      (count, kw) => count + (text.includes(kw.toLowerCase()) ? 1 : 0),
-      0
-    );
+async function loadEmbedder() {
+  if (!embedder) {
+    const { pipeline } = await import("@xenova/transformers");
+    embedder = await pipeline("feature-extraction", "Xenova/all-MiniLM-L6-v2");
+  }
+  return embedder;
+}
+
+function cosineSimilarity(a, b) {
+  const dot = a.reduce((sum, v, i) => sum + v * b[i], 0);
+  const magA = Math.sqrt(a.reduce((s, v) => s + v * v, 0));
+  const magB = Math.sqrt(b.reduce((s, v) => s + v * v, 0));
+  return dot / (magA * magB);
+}
+
+async function classifySectorsAI(title, description) {
+  const embed = await loadEmbedder();
+  const text = `${title}. ${description || ""}`;
+
+  const jobEmbedding = (await embed(text, { pooling: "mean", normalize: true })).data;
+
+  const scores = [];
+
+  for (const sector of SECTORS) {
+    const sectorEmbedding = (
+      await embed(SECTOR_DESCRIPTIONS[sector], { pooling: "mean", normalize: true })
+    ).data;
+
+    scores.push({
+      sector,
+      score: cosineSimilarity(jobEmbedding, sectorEmbedding)
+    });
   }
 
-  return Object.entries(scores)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 2)
-    .map(([sector]) => sector);
+  scores.sort((a, b) => b.score - a.score);
+
+  const topTwo = [...new Set(scores.map(s => s.sector))].slice(0, 2);
+
+  return topTwo.length === 2 ? topTwo : ["business", "technology"];
 }
 
 // ------------------------------
@@ -47,13 +84,8 @@ async function safeFetch(fn, label) {
 }
 
 async function fetchHTML(url) {
-  try {
-    const res = await fetch(url);
-    return await res.text();
-  } catch (err) {
-    console.error("❌ fetchHTML failed:", err.message);
-    return "";
-  }
+  const res = await fetch(url);
+  return await res.text();
 }
 
 // ------------------------------
@@ -64,25 +96,30 @@ async function fetchGuardianJobs() {
   const url = "https://jobs.theguardian.com/jobsrss/";
   const xml = await fetchHTML(url);
 
-  if (!xml || xml.trim() === "") {
-    console.error("❌ Guardian RSS returned empty XML");
-    return [];
-  }
-
   const parsed = await xml2js.parseStringPromise(xml, { explicitArray: false });
   const items = parsed?.rss?.channel?.item || [];
 
-  return items.map((item, i) => ({
-    id: `guardian-${i}`,
-    title: item.title,
-    company: "The Guardian",
-    location: "UK",
-    salary: null,
-    applyUrl: item.link,
-    category: "job",
-    description: item.description || "",
-    sectorPair: classifySectorsKeyword(item.title, item.description)
-  }));
+  const jobs = [];
+
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+
+    const job = {
+      id: `guardian-${i}`,
+      title: item.title,
+      company: "The Guardian",
+      location: "UK",
+      salary: null,
+      applyUrl: item.link,
+      category: "job",
+      description: item.description || ""
+    };
+
+    job.sectorPair = await classifySectorsAI(job.title, job.description);
+    jobs.push(job);
+  }
+
+  return jobs;
 }
 
 // ------------------------------
@@ -90,6 +127,7 @@ async function fetchGuardianJobs() {
 // ------------------------------
 
 async function fetchExampleJobs() {
+  const sectors = await classifySectorsAI("Example Job", "This is a placeholder job.");
   return [
     {
       id: "example-001",
@@ -100,7 +138,7 @@ async function fetchExampleJobs() {
       applyUrl: "https://example.com",
       category: "job",
       description: "This is a placeholder job.",
-      sectorPair: classifySectorsKeyword("Example Job", "This is a placeholder job.")
+      sectorPair: sectors
     }
   ];
 }
